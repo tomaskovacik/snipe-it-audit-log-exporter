@@ -9,6 +9,9 @@ application == snipe-it rule, so the audit log is not stored twice.
 
 No pipeline is needed: the exporter sends every field ready to search.
 
+--alerts also creates five security alerts (privilege, account and login
+changes, API-token use, changes from public IPs); see README.md.
+
 Reconciles by title, so re-running is safe. Without --apply it only prints
 what it would do.
 
@@ -90,6 +93,99 @@ def index_set_body(args):
     }
 
 
+# Security alerts only: Snipe-IT does its own asset alerting (expiring licenses,
+# audits due, ...). `timestamp` is the action's own time and the exporter polls
+# every POLL_INTERVAL (60 s), so ingest lag is about a minute; the window leaves
+# room for an outage. Grace must exceed the window, or an event still inside the
+# window would notify again on the next run. A backfill never fires: its events
+# are old.
+ALERT_WINDOW_MS = 1_800_000      # 30 min
+ALERT_EVERY_MS = 300_000         # 5 min
+ALERT_GRACE_MS = 2_100_000       # 35 min = window + one interval
+# remote_ip is a keyword field (no CIDR queries), so: trailing wildcards
+PRIVATE_IPS = " OR ".join(["10.*", "192.168.*", "127.*"] + [f"172.{n}.*" for n in range(16, 32)])
+
+
+def alert_specs(api_exclude):
+    api_query = "action_source:api" + (f" AND NOT ({api_exclude})" if api_exclude else "")
+    # (title, query, priority, group_by, description). Graylog's email template
+    # prints only group-by fields, so the who/whom fields are part of the key:
+    # one notification per affected account, not one per burst.
+    return [
+        ("user privileges changed", "snipeit_security:user_privileges", 3,
+         ["item_name", "admin_name", "changed_fields"],
+         "A user's permissions (superuser/admin/per-area flags) or Groups changed. "
+         "item_name = the user changed, admin_name = who did it."),
+        ("user account created, deleted or restored", "snipeit_security:user_lifecycle", 2,
+         ["action_type", "item_name", "admin_name"],
+         "A Snipe-IT user account was created, deleted or restored."),
+        ("user login identity changed", "snipeit_security:user_identity", 2,
+         ["item_name", "admin_name", "changed_fields"],
+         "username, email, password or activated changed (a change that also touches "
+         "permissions/Groups goes to the privileges alert instead)."),
+        ("change made through an API token", api_query, 3,
+         ["admin_name", "user_agent", "action_type", "item_type"],
+         "A change was made with an API token: admin_name = whose token, user_agent = the "
+         "client. Exclude known automation with --api-token-exclude."),
+        ("change from a non-internal IP", f"_exists_:remote_ip AND NOT remote_ip:({PRIVATE_IPS})", 3,
+         ["remote_ip", "admin_name", "action_type"],
+         "A change came from a public IP address (not RFC1918). Needs Snipe-IT to see real "
+         "client IPs (trusted proxy configured)."),
+    ]
+
+
+def alert_definition(title, query, priority, group_by, description, stream_id, notification_id):
+    return {
+        "title": title,
+        "description": description,
+        "remediation_steps": "",
+        "priority": priority,
+        "alert": True,
+        "config": {
+            "type": "aggregation-v1",
+            "query": query,
+            "query_parameters": [],
+            "filters": [],
+            "streams": [stream_id],
+            "stream_categories": [],
+            "group_by": group_by,
+            "series": [{"type": "count", "id": "count-0", "field": group_by[0]}],
+            "conditions": {"expression": {
+                "expr": ">",
+                "left": {"expr": "number-ref", "ref": "count-0"},
+                "right": {"expr": "number", "value": 0.0}}},
+            "search_within_ms": ALERT_WINDOW_MS,
+            "execute_every_ms": ALERT_EVERY_MS,
+            "use_cron_scheduling": False,
+            "cron_expression": None,
+            "cron_timezone": None,
+            "event_limit": 100,
+        },
+        "field_spec": {
+            # required only for group_by[0]: admin_name is missing on end-user actions,
+            # and a required missing field would drop the event instead of "(Empty Value)"
+            g: {"data_type": "string",
+                "providers": [{"type": "template-v1", "template": "${source." + g + "}",
+                               "require_values": g == group_by[0]}]}
+            for g in group_by
+        },
+        "key_spec": group_by,
+        "notification_settings": {"grace_period_ms": ALERT_GRACE_MS, "backlog_size": 10},
+        "notifications": ([{"notification_id": notification_id, "notification_parameters": None}]
+                          if notification_id else []),
+        "storage": [{"type": "persist-to-streams-v1", "streams": ["000000000000000000000002"]}],
+        "state": "ENABLED",
+    }
+
+
+# fields compared to decide whether an existing definition needs an update
+def _alert_fingerprint(d):
+    c = d["config"]
+    return (d["priority"], c["query"], c["streams"], c["group_by"], c["search_within_ms"],
+            c["execute_every_ms"], d["notification_settings"]["grace_period_ms"],
+            sorted(n["notification_id"] for n in d.get("notifications", [])))
+
+
 class Setup:
     def __init__(self, gl, args):
         self.gl = gl
@@ -148,6 +244,41 @@ class Setup:
             self.gl.post(f"/api/streams/{s['id']}/rules",
                          dict(m, inverted=True, description="snipe-it has its own stream"))
 
+    def notification_id(self):
+        title = self.args.notification
+        if not title:
+            return None
+        found = self.gl.get("/api/events/notifications?per_page=500")
+        for n in found.get("notifications", found.get("elements", [])):
+            if n["title"] == title:
+                return n["id"]
+        sys.exit(f"--notification: no event notification titled {title!r}")
+
+    def alerts(self, stream_id):
+        nid = self.notification_id()
+        if not nid:
+            print("note  no --notification: alerts create events but send nothing")
+        have = self.gl.get("/api/events/definitions?per_page=500")
+        have = {d["title"]: d for d in have.get("event_definitions", have.get("elements", []))}
+        for spec in alert_specs(self.args.api_token_exclude):
+            title = f"{self.args.alert_prefix} - {spec[0]}"
+            want = alert_definition(title, *spec[1:], stream_id or "0" * 24, nid)
+            cur = have.get(title)
+            if not stream_id:  # dry run before the stream exists
+                self.step(f"create alert {title!r}")
+                continue
+            check = dict(want, id=cur["id"] if cur else "0" * 24)
+            v = self.gl.post("/api/events/definitions/validate", check)
+            if v.get("errors") or v.get("failed"):
+                sys.exit(f"alert {title!r} does not validate: {v}")
+            if cur and _alert_fingerprint(cur) == _alert_fingerprint(want):
+                print(f"ok    alert {title!r}")
+            elif cur:
+                if self.step(f"update alert {title!r}"):
+                    self.gl.req("PUT", f"/api/events/definitions/{cur['id']}", dict(want, id=cur["id"]))
+            elif self.step(f"create alert {title!r}"):
+                self.gl.post("/api/events/definitions", {"entity": want})
+
     def run(self):
         print(f"target {self.gl.url}")
         isid = self.index_set()
@@ -155,6 +286,8 @@ class Setup:
         sid = self.stream(isid, streams)
         for title in self.args.exclude_from:
             self.exclude_from(title, streams)
+        if self.args.alerts:
+            self.alerts(sid)
         if sid:
             print(json.dumps({"index_set": isid, "stream": sid}))
 
@@ -171,6 +304,12 @@ def main():
                    help="value of the exporter's _application field (default: %(default)s)")
     p.add_argument("--lifetime-min", default="P365D", help="minimum retention, ISO 8601 (default: %(default)s)")
     p.add_argument("--lifetime-max", default="P1095D", help="maximum retention, ISO 8601 (default: %(default)s)")
+    p.add_argument("--alerts", action="store_true", help="also create the security alerts (event definitions)")
+    p.add_argument("--notification", metavar="TITLE",
+                   help="existing event notification (e.g. an email notification) the alerts send to")
+    p.add_argument("--api-token-exclude", metavar="QUERY", default="",
+                   help="known API automation to ignore, e.g. 'item_type:license'")
+    p.add_argument("--alert-prefix", default="Snipe-IT", help="alert title prefix (default: %(default)s)")
     p.add_argument("--insecure", action="store_true", help="do not verify the Graylog TLS certificate")
     args = p.parse_args()
 

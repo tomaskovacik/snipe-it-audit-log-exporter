@@ -24,6 +24,37 @@ python3 setup_graylog.py --exclude-from GELF-TCP --apply
 Objects are matched by title, so re-running it is safe and changes nothing. `--help` lists the
 options for other titles, prefixes and retention. Tested against Graylog 7.2.
 
+## Security alerts (`--alerts`)
+
+These are security alerts only. Snipe-IT already handles asset alerting (expiring licenses and
+warranties, audits due, and so on).
+
+| alert | fires when |
+|---|---|
+| user privileges changed | a user's `permissions` or `Groups` change |
+| user account created, deleted or restored | Snipe-IT accounts come and go |
+| user login identity changed | `username`, `email`, `password` or `activated` change |
+| change made through an API token | anything is changed with an API token (`action_source:api`) |
+| change from a non-internal IP | `remote_ip` is not a private (RFC1918) address |
+
+```bash
+python3 setup_graylog.py --alerts --notification "Email admins" \
+  --api-token-exclude 'item_type:license' --apply
+```
+
+* `--notification` is the title of an existing event notification, such as an email
+  notification. Without it, the alerts only create events.
+* `--api-token-exclude` is a query for known automation, so it doesn't alert. In the example,
+  a license-sync job that only touches licenses.
+* Each notification names the affected account, who made the change and what changed, with one
+  notification per account. The fields are group-by keys, because Graylog's email template
+  prints only group-by fields.
+* They run every 5 minutes over a 30-minute window, with 35 minutes of grace so an event never
+  notifies twice. A backfill never fires them, because its events are old.
+* The non-internal IP alert needs Snipe-IT to see real client IPs: behind a reverse proxy,
+  configure `APP_TRUSTED_PROXIES`.
+* Logins and failed logins are not covered. Snipe-IT keeps them outside the activity API.
+
 ## Things to know
 
 * **The backfill is stored under the original event times.** The first run sends the whole history
