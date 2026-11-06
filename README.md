@@ -72,6 +72,23 @@ Docker secret file (so it never appears in `docker inspect`), and hardens the co
 root filesystem, all capabilities dropped, a memory limit and log rotation. The setup steps are in
 the comments at the top of the file.
 
+Both compose files need **Compose v2** (`docker compose`, with a space). The old Python
+`docker-compose` v1 rejects them with `Unsupported config option for services`. If the host has no
+`docker compose`, for example a Debian 11 / Raspberry Pi OS with Debian's `docker.io` package,
+install the v2 plugin binary. It works with Docker 20.10:
+
+```bash
+dpkg --print-architecture      # arm64 -> aarch64 binary below, amd64 -> x86_64
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+docker compose version
+```
+
+The image runs on `linux/amd64` and `linux/arm64`, which covers 64-bit Raspberry Pi OS. A 32-bit
+OS (`dpkg --print-architecture` prints `armhf`) is not supported.
+
 Or with plain docker:
 
 ```bash
