@@ -1,0 +1,15 @@
+services:
+  snipeit-audit-exporter:
+    # prebuilt by GitHub Actions; `docker compose up -d --build` builds from this checkout instead
+    image: ghcr.io/tomaskovacik/snipe-it-audit-log-exporter:latest
+    build: .
+    restart: unless-stopped
+    env_file: .env   # see .env.example
+    extra_hosts:
+      # lets GRAYLOG_HOST=host.docker.internal reach a Graylog published on the Docker host
+      - host.docker.internal:host-gateway
+    volumes:
+      - exporter-state:/data
+
+volumes:
+  exporter-state:
