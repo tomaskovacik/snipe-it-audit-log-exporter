@@ -169,3 +169,7 @@ output {
   gelf { host => "graylog" port => 12201 protocol => "TCP" short_message => "action_type" }
 }
 ```
+
+## License
+
+GNU General Public License v3.0. See [LICENSE](LICENSE).
