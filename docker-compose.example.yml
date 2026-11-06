@@ -1,0 +1,55 @@
+# Deployment example: prebuilt image, API token as a Docker secret, hardened container.
+# (docker-compose.yml in this repo is the build-from-source / .env variant.)
+#
+#   mkdir snipeit-exporter && cd snipeit-exporter
+#   curl -fsSLo docker-compose.yml \
+#     https://raw.githubusercontent.com/tomaskovacik/snipe-it-audit-log-exporter/main/docker-compose.example.yml
+#   # edit SNIPEIT_URL / SNIPEIT_TIMEZONE / GRAYLOG_HOST below, then store the token:
+#   (umask 077; printf '%s' 'PASTE-TOKEN-HERE' > snipeit_api_token)
+#   sudo chown 100:101 snipeit_api_token   # the image runs as uid 100; compose mounts the file as-is
+#   docker compose up -d && docker compose logs -f
+#
+# Every setting is documented in .env.example / the README.
+
+services:
+  snipeit-audit-exporter:
+    image: ghcr.io/tomaskovacik/snipe-it-audit-log-exporter:1.0.0
+    restart: unless-stopped
+    environment:
+      SNIPEIT_URL: https://snipeit.example.com
+      SNIPEIT_API_TOKEN_FILE: /run/secrets/snipeit_api_token
+      # must match Snipe-IT's APP_TIMEZONE: the API returns local times without an offset
+      SNIPEIT_TIMEZONE: UTC
+      # first run only: beginning = backfill the whole history, now = new events only
+      START_FROM: beginning
+      POLL_INTERVAL: "60"
+      GRAYLOG_HOST: graylog.example.com
+      GRAYLOG_PORT: "12201"
+      GRAYLOG_PROTOCOL: tcp
+      GELF_EXTRA_FIELDS: '{"environment":"prod"}'
+    secrets:
+      - snipeit_api_token
+    volumes:
+      - exporter-state:/data     # checkpoint; delete the volume to backfill again
+    # Graylog on this same Docker host: GRAYLOG_HOST=host.docker.internal
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    read_only: true
+    tmpfs:
+      - /tmp                     # health-check heartbeat file
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  snipeit_api_token:
+    file: ./snipeit_api_token
+
+volumes:
+  exporter-state:

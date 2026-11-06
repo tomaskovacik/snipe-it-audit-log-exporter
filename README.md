@@ -66,6 +66,12 @@ docker compose logs -f
 
 To build the image yourself instead, run `docker compose up -d --build`.
 
+For a server deployment, use [`docker-compose.example.yml`](docker-compose.example.yml)
+instead. It pins the image version, keeps settings in the compose file, reads the API token from a
+Docker secret file (so it never appears in `docker inspect`), and hardens the container: read-only
+root filesystem, all capabilities dropped, a memory limit and log rotation. The setup steps are in
+the comments at the top of the file.
+
 Or with plain docker:
 
 ```bash
