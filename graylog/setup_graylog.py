@@ -46,6 +46,7 @@ class Graylog:
         self.url = url.rstrip("/")
         self.auth = base64.b64encode(f"{token}:token".encode()).decode()
         self.ctx = ssl.create_default_context()
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         if not verify_tls:
             self.ctx.check_hostname = False
             self.ctx.verify_mode = ssl.CERT_NONE

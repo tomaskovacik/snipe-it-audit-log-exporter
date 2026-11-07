@@ -137,6 +137,7 @@ class SnipeIt:
     def __init__(self, cfg):
         self.cfg = cfg
         self.ctx = ssl.create_default_context()
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         if not cfg.snipeit_verify_tls:
             self.ctx.check_hostname = False
             self.ctx.verify_mode = ssl.CERT_NONE
@@ -320,6 +321,7 @@ class GelfTcp:
         sock = socket.create_connection((self.cfg.graylog_host, self.cfg.graylog_port), timeout=30)
         if self.cfg.graylog_tls:
             ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             if not self.cfg.graylog_verify_tls:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
@@ -382,6 +384,7 @@ class GelfHttp:
     def _connect(self):
         if self.cfg.graylog_tls:
             ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             if not self.cfg.graylog_verify_tls:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
