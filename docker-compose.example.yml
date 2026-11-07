@@ -13,7 +13,7 @@
 
 services:
   snipeit-audit-exporter:
-    image: ghcr.io/tomaskovacik/snipe-it-audit-log-exporter:1.0.0
+    image: ghcr.io/tomaskovacik/snipe-it-audit-log-exporter:1.0.1
     restart: unless-stopped
     environment:
       SNIPEIT_URL: https://snipeit.example.com
