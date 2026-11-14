@@ -55,7 +55,7 @@ jobs:
             --entrypoint python exporter-smoke -c "import sys; sys.path.insert(0, '/app'); import exporter; exporter.Config()"
           # no heartbeat written yet, so the healthcheck must report unhealthy
           if docker run --rm exporter-smoke --healthcheck; then exit 1; fi
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
