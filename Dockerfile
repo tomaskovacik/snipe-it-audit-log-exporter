@@ -1,4 +1,4 @@
-FROM python:3.13-alpine
+FROM python:3.15-alpine
 
 RUN apk add --no-cache tzdata \
  && addgroup -S exporter && adduser -S -G exporter -h /app exporter \
